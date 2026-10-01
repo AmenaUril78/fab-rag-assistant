@@ -62,6 +62,8 @@ if question:
         t0 = time.time()
         with st.spinner("Searching knowledge base…"):
             ans = rag.ask(question, k=k)
+        if ans.error:
+            st.warning(ans.error)
         st.markdown(ans.answer)
         st.caption(f"{time.time() - t0:.1f}s · mode: {ans.mode} · retrieval: {mode}")
         with st.expander(f"Sources ({len(ans.sources)})"):
