@@ -4,6 +4,7 @@ import time
 import streamlit as st
 
 from fabrag.config import get_settings
+from fabrag.ingest import build_index
 from fabrag.rag import FabRAG
 
 st.set_page_config(page_title="FabAssist", page_icon="🔧", layout="wide")
@@ -11,7 +12,14 @@ st.set_page_config(page_title="FabAssist", page_icon="🔧", layout="wide")
 
 @st.cache_resource
 def load_rag(mode: str) -> FabRAG:
-    return FabRAG(get_settings(retrieval_mode=mode))
+    settings = get_settings(retrieval_mode=mode)
+    try:
+        return FabRAG(settings)
+    except Exception:
+        # First run (e.g. on Streamlit Cloud or Codespaces): build the vector DB automatically
+        with st.spinner("Building the vector database (first run only)…"):
+            build_index(settings)
+        return FabRAG(settings)
 
 
 with st.sidebar:
