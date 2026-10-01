@@ -28,7 +28,7 @@ class Settings:
     # LLM: "anthropic", "openai", or "none" (extractive answer, no API key needed)
     llm_provider: str = os.getenv("LLM_PROVIDER", "anthropic")
     anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5-5")
-    openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    openai_model: str = os.getenv("OPENAI_MODEL", "gpt-5.6-luna")
 
     chunk_size: int = int(os.getenv("CHUNK_SIZE", "700"))
     chunk_overlap: int = int(os.getenv("CHUNK_OVERLAP", "100"))

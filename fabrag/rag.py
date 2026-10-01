@@ -104,7 +104,11 @@ def get_llm(settings: Settings):
     if p == "openai":
         from langchain_openai import ChatOpenAI
 
-        return ChatOpenAI(model=settings.openai_model, temperature=0)
+        model = settings.openai_model
+        # Reasoning models (gpt-5.x, o-series) only accept the default temperature
+        if model.startswith(("gpt-5", "o1", "o3", "o4")):
+            return ChatOpenAI(model=model)
+        return ChatOpenAI(model=model, temperature=0)
     if p == "none":
         return None
     raise ValueError(f"Unknown LLM_PROVIDER: {p}")
