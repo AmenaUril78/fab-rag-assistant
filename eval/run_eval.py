@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 from fabrag.config import get_settings
+from fabrag.ingest import build_index
 from fabrag.rag import FabRAG
 
 HERE = Path(__file__).parent
@@ -76,6 +77,8 @@ def main() -> None:
 
     questions = json.loads((HERE / f"questions_{args.profile}.json").read_text())
     s = get_settings(args.profile)
+    if not (s.persist_dir / "chroma.sqlite3").exists():  # first run: build the index automatically
+        build_index(s)
     rag = FabRAG(s)
     results = [evaluate(rag, questions, m) for m in ("vector", "bm25", "hybrid")]
 
