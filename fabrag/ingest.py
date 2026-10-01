@@ -73,11 +73,7 @@ LOADERS: Dict[str, Callable[[Path], str]] = {
 
 def load_documents(docs_dir: Path) -> List[Document]:
     docs = []
-    for path in sorted(docs_dir.rglob("*")):
-        if not path.is_file() or path.suffix.lower() not in LOADERS or path.name.startswith("."):
-            continue
-        if path.name == "README.md" and path.parent == docs_dir:
-            continue  # folder instructions, not knowledge
+    for path in list_doc_files(docs_dir):
         try:
             text = LOADERS[path.suffix.lower()](path)
         except Exception as e:  # one bad file should not stop the whole index
@@ -120,6 +116,32 @@ def split_documents(docs: List[Document], chunk_size: int, chunk_overlap: int) -
     return chunks
 
 
+def list_doc_files(docs_dir: Path) -> List[Path]:
+    """All loadable files in a folder (recursive), excluding the folder's own README."""
+    if not docs_dir.exists():
+        return []
+    return sorted(p for p in docs_dir.rglob("*")
+                  if p.is_file() and p.suffix.lower() in LOADERS and not p.name.startswith(".")
+                  and not (p.name == "README.md" and p.parent == docs_dir))
+
+
+def docs_fingerprint(docs_dir: Path) -> str:
+    """Changes whenever a file is added, removed, or edited, so the app can re-index automatically."""
+    import hashlib
+
+    h = hashlib.sha1()
+    for p in list_doc_files(docs_dir):
+        st = p.stat()
+        h.update(f"{p.relative_to(docs_dir)}|{st.st_size}|{int(st.st_mtime)}".encode())
+    return h.hexdigest()
+
+
+def index_is_current(s: Settings) -> bool:
+    f = s.persist_dir / "fingerprint.txt"
+    return (s.persist_dir / "chroma.sqlite3").exists() and f.exists() and \
+        f.read_text().strip() == f"{s.embedding_provider}:{docs_fingerprint(s.docs_dir)}"
+
+
 def build_index(settings: Settings | None = None, reset: bool = True) -> Chroma:
     s = settings or get_settings()
     s.persist_dir.mkdir(parents=True, exist_ok=True)
@@ -135,6 +157,7 @@ def build_index(settings: Settings | None = None, reset: bool = True) -> Chroma:
     chunks = split_documents(docs, s.chunk_size, s.chunk_overlap)
     if chunks:
         store.add_documents(chunks, ids=[c.metadata["chunk_id"] for c in chunks])
+    (s.persist_dir / "fingerprint.txt").write_text(f"{s.embedding_provider}:{docs_fingerprint(s.docs_dir)}")
     print(f"[{s.profile.key}] Indexed {len(chunks)} chunks from {len(docs)} documents in {s.docs_dir} "
           f"(embeddings: {s.embedding_provider})")
     return store

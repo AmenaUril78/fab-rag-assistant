@@ -1,6 +1,7 @@
 """Streamlit chat UI.  Run:  python -m streamlit run app.py"""
 import os
 import time
+from pathlib import Path
 
 import streamlit as st
 
@@ -14,20 +15,15 @@ except Exception:  # no secrets file locally: fine, .env / shell env is used ins
     pass
 
 from fabrag.config import PROFILES, get_settings
-from fabrag.ingest import LOADERS, build_index
+from fabrag.ingest import LOADERS, build_index, docs_fingerprint, index_is_current, list_doc_files
 from fabrag.rag import FabRAG, explain_llm_error
 
 st.set_page_config(page_title="RAG Troubleshooting Assistant", page_icon="🔧", layout="wide")
 
 LABELS = {"fab": "Semiconductor fab (demo)", "it": "IT / network ops (demo)", "private": "My documents (private)"}
-
-
-def private_doc_count() -> int:
-    d = PROFILES["private"].docs_dir
-    if not d.exists():
-        return 0
-    return sum(1 for p in d.rglob("*") if p.is_file() and p.suffix.lower() in LOADERS
-               and not (p.name == "README.md" and p.parent == d))
+# The public Streamlit Cloud app never offers "My documents" or uploads; your laptop always does.
+IS_LOCAL = not Path("/mount/src").exists() and os.getenv("FABRAG_PUBLIC") != "1"
+UPLOAD_TYPES = [ext.lstrip(".") for ext in LOADERS]
 
 
 def key_fingerprint(name: str) -> str:
@@ -38,20 +34,43 @@ def key_fingerprint(name: str) -> str:
 
 
 @st.cache_resource
-def load_rag(profile: str, mode: str, key_fp: str = "") -> FabRAG:
+def load_rag(profile: str, mode: str, key_fp: str = "", docs_fp: str = "") -> FabRAG:
     settings = get_settings(profile, retrieval_mode=mode)
-    if not (settings.persist_dir / "chroma.sqlite3").exists():
-        # First run (e.g. on Streamlit Cloud or a fresh clone): build the vector DB automatically
-        with st.spinner(f"Building the vector database for {settings.profile.name} (first run only)…"):
+    if not index_is_current(settings):
+        # First run, or files were added / edited / removed: (re)build automatically
+        with st.spinner(f"Reading your documents for {settings.profile.name}…"):
             build_index(settings)
     return FabRAG(settings)
+
+
+def documents_panel(docs_dir: Path) -> None:
+    """Add / remove files for the private knowledge base, right in the app."""
+    files = list_doc_files(docs_dir)
+    with st.expander(f"📄 Your documents ({len(files)}) · add or remove", expanded=not files):
+        st.session_state.setdefault("upload_n", 0)
+        uploads = st.file_uploader("Drop runbooks here (PDF, Word, Markdown, text, HTML)", type=UPLOAD_TYPES,
+                                   accept_multiple_files=True, key=f"up_{st.session_state.upload_n}")
+        if uploads:
+            docs_dir.mkdir(parents=True, exist_ok=True)
+            for f in uploads:
+                (docs_dir / Path(f.name).name).write_bytes(f.getbuffer())
+            st.session_state.upload_n += 1  # reset the uploader so files are saved only once
+            st.rerun()
+        for f in files:
+            c1, c2 = st.columns([6, 1])
+            c1.markdown(f"`{f.relative_to(docs_dir)}`")
+            if c2.button("Remove", key=f"rm_{f}"):
+                f.unlink()
+                st.rerun()
+        st.caption(f"Saved only on this computer in `{docs_dir}` (never uploaded to GitHub). "
+                   "New, edited, or removed files are picked up automatically.")
 
 
 # ---------------- sidebar ----------------
 with st.sidebar:
     st.header("Settings")
-    options = ["fab", "it"] + (["private"] if private_doc_count() else [])
-    default = os.getenv("FABRAG_PROFILE", "fab")
+    options = (["private"] if IS_LOCAL else []) + ["fab", "it"]
+    default = os.getenv("FABRAG_PROFILE") or ("private" if IS_LOCAL else "fab")
     profile = st.selectbox("Knowledge base", options, format_func=LABELS.get,
                            index=options.index(default) if default in options else 0)
     mode = st.radio("Retrieval mode", ["hybrid", "vector", "bm25"], index=0,
@@ -76,12 +95,6 @@ with st.sidebar:
             except Exception as e:
                 st.error(explain_llm_error(e).replace(" Showing the retrieved passages instead.", ""))
 
-    if st.button("Rebuild index", use_container_width=True,
-                 help="Re-read every file in this knowledge base's folder. Use after adding or editing documents."):
-        with st.spinner("Rebuilding…"):
-            build_index(get_settings(profile))
-        st.cache_resource.clear()
-        st.rerun()
     if st.button("Clear chat", use_container_width=True):
         st.session_state[f"history_{profile}"] = []
 
@@ -95,11 +108,14 @@ with st.sidebar:
 st.title(f"{s.profile.icon} {s.profile.name}")
 st.caption(s.profile.subtitle)
 
-try:
-    rag = load_rag(profile, mode, key_fingerprint("OPENAI_API_KEY") + key_fingerprint("ANTHROPIC_API_KEY"))
-except RuntimeError as e:
-    st.info(f"{e}\n\nThen click **Rebuild index** in the sidebar.")
-    st.stop()
+if profile == "private":
+    documents_panel(s.docs_dir)
+    if not list_doc_files(s.docs_dir):
+        st.info("Add a few runbooks above to get started. Then ask a question in the box below.")
+        st.stop()
+
+rag = load_rag(profile, mode, key_fingerprint("OPENAI_API_KEY") + key_fingerprint("ANTHROPIC_API_KEY"),
+               docs_fingerprint(s.docs_dir))
 
 docs = len({c.metadata.get("source") for c in rag.all_chunks})
 st.caption(f"{docs} documents · {len(rag.all_chunks)} chunks indexed from `{s.docs_dir.name}/`")

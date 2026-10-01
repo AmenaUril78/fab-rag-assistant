@@ -80,11 +80,14 @@ python -m streamlit run app.py   # chat UI at http://localhost:8501
 uvicorn api:app --reload         # REST API, docs at http://localhost:8000/docs
 ```
 
-### Use it with your own work documents
+### Use it with your own work documents (Mac, no terminal)
 
-1. Copy your runbooks, SOPs, and notes into `data/private/`. Subfolders are fine. Supported: `.md`, `.txt`, `.pdf`, `.docx`, `.html`.
-2. Start the app, choose **My documents (private)** in the sidebar, and click **Rebuild index**. Click it again whenever you add or edit files.
-3. Use Ollama (below) so documents and questions never leave your computer.
+1. Install [Ollama](https://ollama.com) once and download a model (`ollama pull llama3.2`).
+2. In Finder, double-click **`Start FabAssist.command`** in the project folder. The first time, right-click it and choose **Open**. It starts Ollama, sets everything up, and opens the app in your browser.
+3. The app opens on **My documents (private)**. Drag your runbooks (PDF, Word, Markdown, text, HTML) into **Your documents**. They are read automatically; new, edited, or removed files are picked up on their own.
+4. Ask questions. Close the Terminal window to stop the app.
+
+Files are saved in `data/private/` on your computer only.
 
 `data/private/` is listed in `.gitignore`, and a test checks that it stays ignored, so your files are not committed or pushed. Check your organization's data policy before using internal documents with any AI tool, and treat answers as a pointer to the right runbook, not a replacement for it: always open the cited source before changing a production device.
 

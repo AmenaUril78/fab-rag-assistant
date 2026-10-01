@@ -127,3 +127,21 @@ def test_api_endpoints(rag, monkeypatch):
     assert r.status_code == 200 and len(r.json()["sources"]) == 3
     r = client.post("/search", json={"query": "overlay", "mode": "bm25"})
     assert r.status_code == 200 and r.json()
+
+
+def test_index_rebuilds_when_files_change(tmp_path, tmp_path_factory):
+    from fabrag.ingest import index_is_current
+
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "a.md").write_text("# A\n\n## One\nfirst runbook")
+    s = get_settings("it", docs_dir=docs, persist_dir=tmp_path_factory.mktemp("fp"),
+                     embedding_provider="hashing", llm_provider="none")
+    assert not index_is_current(s)
+    build_index(s)
+    assert index_is_current(s)
+    (docs / "b.md").write_text("# B\n\n## Two\nsecond runbook")   # add a file
+    assert not index_is_current(s)
+    build_index(s)
+    (docs / "a.md").unlink()                                        # remove a file
+    assert not index_is_current(s)
