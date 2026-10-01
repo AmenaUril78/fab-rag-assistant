@@ -92,6 +92,7 @@ class Answer:
     answer: str
     sources: List[dict] = field(default_factory=list)
     mode: str = ""
+    error: str = ""
 
 
 def get_llm(settings: Settings):
@@ -154,7 +155,13 @@ class FabRAG:
             return Answer(question, self._extractive(question, hits), sources, mode="extractive")
 
         context = "\n\n".join(f"[{s['n']}] ({s['doc_id']} - {s['section']})\n{s['text']}" for s in sources)
-        msg = self.chain.invoke({"context": context, "question": question})
+        try:
+            msg = self.chain.invoke({"context": context, "question": question})
+        except Exception as e:  # bad key, quota, network: degrade gracefully instead of crashing
+            return Answer(question, self._extractive(question, hits), sources,
+                          mode="extractive (LLM unavailable)",
+                          error=f"{type(e).__name__}: the LLM call failed. Check the API key and billing. "
+                                "Showing the retrieved passages instead.")
         return Answer(question, msg.content if isinstance(msg.content, str) else str(msg.content), sources, mode=self.s.llm_provider)
 
     @staticmethod
