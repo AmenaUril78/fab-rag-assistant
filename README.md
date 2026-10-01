@@ -32,6 +32,16 @@ Hybrid retrieval fixed the cases each method missed on its own: vector search mi
 | Correct "not found" on out-of-scope questions | 100% (2 of 2) |
 | Average latency (local Llama 3.2, Apple Silicon) | 1.7 s |
 
+### OpsAssist results (27 labeled IT questions, MiniLM embeddings, Llama 3.2 via Ollama)
+
+| Retrieval | Doc Hit@1 | Doc Hit@3 | Section Hit@3 | MRR |
+|---|---|---|---|---|
+| Vector only | 89% | 100% | 100% | 0.94 |
+| BM25 only | 81% | 96% | 89% | 0.90 |
+| **Hybrid (RRF)** | **93%** | **100%** | **100%** | **0.96** |
+
+Generation: 67% of answers included citations, 100% correct "not found" on out-of-scope questions, 2.4 s average latency. The lower citation rate comes from the small 3B local model sometimes answering without bracketed citations; a larger model or a citation-enforcing output format is the next fix.
+
 *Limitations: the evaluation set is small and was written alongside the documents, so these numbers show the method works, not production accuracy. Next steps are a larger engineer-labeled set and a re-ranker.*
 
 > The sample knowledge bases in `data/fab/` and `data/it/` are **fictional**. They were written for this project to resemble real documentation and do not describe any real organization.
