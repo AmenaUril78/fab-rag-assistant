@@ -1,4 +1,12 @@
-# FabAssist: RAG Troubleshooting Assistant for Semiconductor Fabs
+# RAG Troubleshooting Assistant: FabAssist and OpsAssist
+
+One hybrid-retrieval RAG pipeline, three knowledge bases you can switch between in the app:
+
+| Profile | For | Documents |
+|---|---|---|
+| **FabAssist** (`fab`) | Semiconductor fab engineers and technicians | Fictional SOPs, alarm codes, SPC rules, lessons learned (`data/fab/`) |
+| **OpsAssist** (`it`) | IT / network operations | Fictional switch, DHCP, DNS, backup, change-management runbooks, syslog reference, postmortems (`data/it/`) |
+| **My documents** (`private`) | Your own work | Anything you drop in `data/private/` (md, txt, pdf, docx, html), **never pushed to GitHub** |
 
 FabAssist answers fab engineers' and technicians' questions ("Tool shows ALM-4021, what do I do?", "Overlay is out of spec after a reticle change") from a knowledge base of SOPs, troubleshooting guides, alarm-code references and lessons-learned reports. Every answer cites the passages it came from.
 
@@ -8,7 +16,7 @@ It is built as a forward-deployed prototype: quick to stand up, measurable, and 
 
 ![FabAssist answering a question with Llama 3.2 running locally](docs/screenshot.png)
 
-### Results (28 labeled questions, MiniLM embeddings, Llama 3.2 via Ollama)
+### FabAssist results (28 labeled questions, MiniLM embeddings, Llama 3.2 via Ollama)
 
 | Retrieval | Doc Hit@1 | Doc Hit@3 | Section Hit@3 | MRR | Hit@3 (exact ID lookups) |
 |---|---|---|---|---|---|
@@ -26,7 +34,7 @@ Hybrid retrieval fixed the cases each method missed on its own: vector search mi
 
 *Limitations: the evaluation set is small and was written alongside the documents, so these numbers show the method works, not production accuracy. Next steps are a larger engineer-labeled set and a re-ranker.*
 
-> The sample knowledge base in `data/docs/` is **fictional**. It was written for this project to resemble real fab documentation. Swap in your own documents to reuse the pipeline.
+> The sample knowledge bases in `data/fab/` and `data/it/` are **fictional**. They were written for this project to resemble real documentation and do not describe any real organization.
 
 ## Architecture
 
@@ -57,10 +65,18 @@ python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\
 pip install -r requirements.txt
 cp .env.example .env                                   # add your ANTHROPIC_API_KEY (or set LLM_PROVIDER=none)
 
-python -m fabrag.ingest          # chunk + embed + store in ./chroma_db (first run downloads MiniLM, ~80 MB)
-streamlit run app.py             # chat UI at http://localhost:8501
+python -m fabrag.ingest --profile fab   # chunk + embed + store (the app also does this on first launch)
+python -m streamlit run app.py   # chat UI at http://localhost:8501
 uvicorn api:app --reload         # REST API, docs at http://localhost:8000/docs
 ```
+
+### Use it with your own work documents
+
+1. Copy your runbooks, SOPs, and notes into `data/private/`. Subfolders are fine. Supported: `.md`, `.txt`, `.pdf`, `.docx`, `.html`.
+2. Start the app, choose **My documents (private)** in the sidebar, and click **Rebuild index**. Click it again whenever you add or edit files.
+3. Use Ollama (below) so documents and questions never leave your computer.
+
+`data/private/` is listed in `.gitignore`, and a test checks that it stays ignored, so your files are not committed or pushed. Check your organization's data policy before using internal documents with any AI tool, and treat answers as a pointer to the right runbook, not a replacement for it: always open the cited source before changing a production device.
 
 ### Run fully local with Ollama (no API key)
 
@@ -85,11 +101,11 @@ curl -X POST localhost:8000/ask -H "Content-Type: application/json" \
 
 ## Evaluation
 
-`eval/questions.json` has 28 labeled questions: paraphrased "semantic" questions plus "exact-ID" lookups (alarm codes, document IDs, incident numbers). Each one is labeled with the expected document and section.
+`eval/questions_fab.json` (28 questions) and `eval/questions_it.json` (27 questions) contain paraphrased "semantic" questions plus "exact-ID" lookups (alarm codes, syslog mnemonics, exception names, document IDs). Each one is labeled with the expected document and section.
 
 ```bash
-python -m eval.run_eval              # retrieval metrics for vector vs BM25 vs hybrid
-python -m eval.run_eval --generate   # also checks citation rate, abstention on out-of-scope questions, latency
+python -m eval.run_eval --profile fab              # retrieval metrics: vector vs BM25 vs hybrid
+python -m eval.run_eval --profile it --generate    # also citation rate, out-of-scope abstention, latency
 ```
 
 Metrics are Doc Hit@1, Doc Hit@3, Section Hit@3 and MRR, broken down by question type. Results are written to `eval/results_<embedding>.md`.
@@ -103,15 +119,17 @@ pytest -q     # runs fully offline: hashing embeddings + extractive mode, includ
 ## Project layout
 
 ```
-fabrag/config.py      settings from env vars
+fabrag/config.py      profiles (fab, it, private) and settings from env vars
 fabrag/embeddings.py  MiniLM (ONNX) / OpenAI / hashing embeddings behind LangChain's Embeddings interface
-fabrag/ingest.py      load → section-aware chunk → embed → Chroma
+fabrag/ingest.py      load md/txt/pdf/docx/html → section-aware chunk → embed → Chroma
 fabrag/rag.py         BM25, RRF hybrid retrieval, grounded prompt, LLM call, extractive fallback
-app.py                Streamlit chat UI with source viewer and retrieval-mode toggle
+app.py                Streamlit chat UI: knowledge-base switcher, rebuild index, source viewer, retrieval-mode toggle
 api.py                FastAPI: /health, /ask, /search
 eval/                 labeled question set + evaluation script
 tests/                pytest suite
-data/docs/            fictional fab knowledge base (9 documents)
+data/fab/             fictional fab knowledge base (9 documents)
+data/it/              fictional IT / network ops knowledge base (9 documents)
+data/private/         your own documents (git-ignored)
 ```
 
 ## Path to production (what I'd do next)

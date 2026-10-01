@@ -12,3 +12,5 @@ numpy
 python-dotenv
 pytest
 httpx
+pypdf
+python-docx

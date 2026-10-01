@@ -1,4 +1,4 @@
-"""Streamlit chat UI for FabAssist.  Run:  streamlit run app.py"""
+"""Streamlit chat UI.  Run:  python -m streamlit run app.py"""
 import os
 import time
 
@@ -13,11 +13,21 @@ try:
 except Exception:  # no secrets file locally: fine, .env / shell env is used instead
     pass
 
-from fabrag.config import get_settings
-from fabrag.ingest import build_index
-from fabrag.rag import FabRAG
+from fabrag.config import PROFILES, get_settings
+from fabrag.ingest import LOADERS, build_index
+from fabrag.rag import FabRAG, explain_llm_error
 
-st.set_page_config(page_title="FabAssist", page_icon="🔧", layout="wide")
+st.set_page_config(page_title="RAG Troubleshooting Assistant", page_icon="🔧", layout="wide")
+
+LABELS = {"fab": "Semiconductor fab (demo)", "it": "IT / network ops (demo)", "private": "My documents (private)"}
+
+
+def private_doc_count() -> int:
+    d = PROFILES["private"].docs_dir
+    if not d.exists():
+        return 0
+    return sum(1 for p in d.rglob("*") if p.is_file() and p.suffix.lower() in LOADERS
+               and not (p.name == "README.md" and p.parent == d))
 
 
 def key_fingerprint(name: str) -> str:
@@ -28,21 +38,27 @@ def key_fingerprint(name: str) -> str:
 
 
 @st.cache_resource
-def load_rag(mode: str, key_fp: str = "") -> FabRAG:
-    settings = get_settings(retrieval_mode=mode)
+def load_rag(profile: str, mode: str, key_fp: str = "") -> FabRAG:
+    settings = get_settings(profile, retrieval_mode=mode)
     if not (settings.persist_dir / "chroma.sqlite3").exists():
-        # First run (e.g. on Streamlit Cloud or Codespaces): build the vector DB automatically
-        with st.spinner("Building the vector database (first run only)…"):
+        # First run (e.g. on Streamlit Cloud or a fresh clone): build the vector DB automatically
+        with st.spinner(f"Building the vector database for {settings.profile.name} (first run only)…"):
             build_index(settings)
     return FabRAG(settings)
 
 
+# ---------------- sidebar ----------------
 with st.sidebar:
     st.header("Settings")
+    options = ["fab", "it"] + (["private"] if private_doc_count() else [])
+    default = os.getenv("FABRAG_PROFILE", "fab")
+    profile = st.selectbox("Knowledge base", options, format_func=LABELS.get,
+                           index=options.index(default) if default in options else 0)
     mode = st.radio("Retrieval mode", ["hybrid", "vector", "bm25"], index=0,
                     help="Hybrid = vector search + BM25 keyword search fused with Reciprocal Rank Fusion")
     k = st.slider("Passages to retrieve (top-k)", 2, 8, 4)
-    s = get_settings()
+
+    s = get_settings(profile)
     st.caption(f"Embeddings: `{s.embedding_provider}` · LLM: `{s.llm_provider}`")
     key_name = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}.get(s.llm_provider)
     if key_name:
@@ -58,31 +74,39 @@ with st.sidebar:
                 st.success(f"Key works. {len(ids)} models available:")
                 st.code("\n".join(ids[:60]) or "(none listed)")
             except Exception as e:
-                from fabrag.rag import explain_llm_error
-
                 st.error(explain_llm_error(e).replace(" Showing the retrieved passages instead.", ""))
+
+    if st.button("Rebuild index", use_container_width=True,
+                 help="Re-read every file in this knowledge base's folder. Use after adding or editing documents."):
+        with st.spinner("Rebuilding…"):
+            build_index(get_settings(profile))
+        st.cache_resource.clear()
+        st.rerun()
+    if st.button("Clear chat", use_container_width=True):
+        st.session_state[f"history_{profile}"] = []
+
     st.divider()
     st.markdown("**Try asking**")
-    examples = [
-        "Tool shows ALM-4021. What should I do?",
-        "What must pass before a PECVD tool is released after PM?",
-        "Overlay is out of spec after a reticle change. What could cause it?",
-        "How often do we change the SC1 bath?",
-        "I smell an unusual odor near a gas cabinet.",
-    ]
-    for ex in examples:
-        if st.button(ex, use_container_width=True):
+    for ex in s.profile.examples:
+        if st.button(ex, use_container_width=True, key=f"ex_{profile}_{ex}"):
             st.session_state.pending = ex
 
-st.title("🔧 FabAssist")
-st.caption("RAG assistant over fab SOPs, troubleshooting guides, alarm codes, and lessons learned. "
-           "Sample knowledge base is fictional.")
+# ---------------- main ----------------
+st.title(f"{s.profile.icon} {s.profile.name}")
+st.caption(s.profile.subtitle)
 
-rag = load_rag(mode, key_fingerprint("OPENAI_API_KEY") + key_fingerprint("ANTHROPIC_API_KEY"))
-if "history" not in st.session_state:
-    st.session_state.history = []
+try:
+    rag = load_rag(profile, mode, key_fingerprint("OPENAI_API_KEY") + key_fingerprint("ANTHROPIC_API_KEY"))
+except RuntimeError as e:
+    st.info(f"{e}\n\nThen click **Rebuild index** in the sidebar.")
+    st.stop()
 
-for turn in st.session_state.history:
+docs = len({c.metadata.get("source") for c in rag.all_chunks})
+st.caption(f"{docs} documents · {len(rag.all_chunks)} chunks indexed from `{s.docs_dir.name}/`")
+
+hist_key = f"history_{profile}"
+st.session_state.setdefault(hist_key, [])
+for turn in st.session_state[hist_key]:
     with st.chat_message("user"):
         st.write(turn["q"])
     with st.chat_message("assistant"):
@@ -102,7 +126,7 @@ if question:
         st.caption(f"{time.time() - t0:.1f}s · mode: {ans.mode} · retrieval: {mode}")
         with st.expander(f"Sources ({len(ans.sources)})"):
             for src in ans.sources:
-                st.markdown(f"**[{src['n']}] {src['doc_id']} — {src['section']}**  \n"
-                            f"`{src['source']}` · score {src['score']}")
+                label = f"{src['doc_id']} — " if src.get("doc_id") else ""
+                st.markdown(f"**[{src['n']}] {label}{src['section']}**  \n`{src['source']}` · score {src['score']}")
                 st.text(src["text"][:800])
-    st.session_state.history.append({"q": question, "a": ans.answer})
+    st.session_state[hist_key].append({"q": question, "a": ans.answer})

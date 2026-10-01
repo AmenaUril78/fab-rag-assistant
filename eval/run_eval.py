@@ -5,7 +5,7 @@ Metrics (per question, then averaged):
   - Section Hit@3:     correct document AND section appears in the top 3
   - MRR:               mean reciprocal rank of the first chunk from the correct document
 
-Usage:  python -m eval.run_eval            (retrieval metrics, no API key needed)
+Usage:  python -m eval.run_eval [--profile it] (retrieval metrics, no API key needed)
         python -m eval.run_eval --generate (also calls the LLM and checks citations)
 """
 from __future__ import annotations
@@ -24,6 +24,7 @@ HERE = Path(__file__).parent
 UNANSWERABLE = [
     "What is the cafeteria menu for Friday?",
     "What is the maximum ion implant dose for the source/drain step?",
+    "What is the license renewal cost for our firewall vendor?",
 ]
 
 
@@ -69,15 +70,16 @@ def check_generation(rag: FabRAG, questions: list) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--profile", default="fab", help="fab | it (each has its own question set)")
     ap.add_argument("--generate", action="store_true", help="also evaluate LLM answers (needs API key)")
     args = ap.parse_args()
 
-    questions = json.loads((HERE / "questions.json").read_text())
-    s = get_settings()
+    questions = json.loads((HERE / f"questions_{args.profile}.json").read_text())
+    s = get_settings(args.profile)
     rag = FabRAG(s)
     results = [evaluate(rag, questions, m) for m in ("vector", "bm25", "hybrid")]
 
-    lines = [f"# Retrieval Evaluation\n",
+    lines = [f"# Retrieval Evaluation: {s.profile.name} ({args.profile})\n",
              f"Questions: {len(questions)} · Embeddings: `{s.embedding_provider}` · "
              f"Chunks: {len(rag.all_chunks)}\n",
              "| Retrieval | Doc Hit@1 | Doc Hit@3 | Section Hit@3 | MRR | Hit@3 (semantic) | Hit@3 (exact ID) |",
@@ -100,7 +102,7 @@ def main() -> None:
 
     report = "\n".join(lines)
     print(report)
-    (HERE / f"results_{s.embedding_provider}.md").write_text(report + "\n")
+    (HERE / f"results_{args.profile}_{s.embedding_provider}.md").write_text(report + "\n")
 
 
 if __name__ == "__main__":

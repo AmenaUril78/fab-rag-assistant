@@ -21,7 +21,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from .config import Settings, get_settings
 from .embeddings import get_embeddings
 
-TOKEN_RE = re.compile(r"[a-z0-9]+(?:[-.][a-z0-9]+)*")
+TOKEN_RE = re.compile(r"[a-z0-9_]+(?:[-.][a-z0-9_]+)*")
 STOP = set("a an the of to and or for in on at is are be it this that with as by from what how do does when why which should i my".split())
 
 
@@ -32,8 +32,8 @@ def tokenize(text: str) -> List[str]:
         if t in STOP:
             continue
         out.append(t)
-        if "-" in t:  # index "alm-4021" and also "alm", "4021"
-            out.extend(p for p in t.split("-") if p)
+        if "-" in t or "_" in t:  # index "alm-4021" and also "alm", "4021"; "err_disable" and "err", "disable"
+            out.extend(p for p in re.split(r"[-_]", t) if p)
     return out
 
 
@@ -74,17 +74,24 @@ def rrf_fuse(rankings: List[List[Document]], k: int = 60) -> List[tuple[Document
     return sorted(((by_id[c], s) for c, s in scores.items()), key=lambda x: x[1], reverse=True)
 
 
-SYSTEM_PROMPT = """You are FabAssist, a troubleshooting assistant for semiconductor fab engineers and technicians.
+SYSTEM_PROMPT = """You are {assistant}, a troubleshooting assistant for {audience}.
 Answer ONLY using the numbered context passages. Rules:
 - Cite every factual statement with the passage number in brackets, e.g. [1] or [2][3].
-- Give concrete steps, limits, and alarm codes exactly as written in the context.
-- If the context does not contain the answer, say "I could not find this in the knowledge base" and suggest who to escalate to if the context mentions it. Never guess numbers or limits.
-- If the question involves safety (gas leaks, chemicals, lockout), put the safety action first."""
+- Give concrete steps, limits, commands, and error/alarm codes exactly as written in the context.
+- If the context does not contain the answer, say "I could not find this in the knowledge base" and suggest who to escalate to if the context mentions it. Never guess numbers, limits, or commands.
+{extra_rules}"""
 
-PROMPT = ChatPromptTemplate.from_messages([
-    ("system", SYSTEM_PROMPT),
-    ("human", "Context passages:\n\n{context}\n\nQuestion: {question}"),
-])
+
+def build_prompt(settings: Settings) -> ChatPromptTemplate:
+    p = settings.profile
+    system = SYSTEM_PROMPT.format(assistant=p.name, audience=p.audience, extra_rules=p.extra_rules)
+    return ChatPromptTemplate.from_messages([
+        ("system", system.replace("{", "{{").replace("}", "}}")),
+        ("human", "Context passages:\n\n{context}\n\nQuestion: {question}"),
+    ])
+
+
+PROMPT = build_prompt(get_settings("fab"))  # default, kept for backwards compatibility
 
 
 @dataclass
@@ -117,6 +124,8 @@ def get_llm(settings: Settings):
 
         # Try the configured model first, then common models, so the app works with
         # whichever models the API key has access to.
+        if os.getenv("OPENAI_BASE_URL"):  # Ollama / other OpenAI-compatible server: use the model as given
+            return make(settings.openai_model)
         models = [settings.openai_model] + [m for m in OPENAI_FALLBACK_MODELS if m != settings.openai_model]
         return make(models[0]).with_fallbacks([make(m) for m in models[1:]])
     if p == "none":
@@ -152,11 +161,12 @@ class FabRAG:
         )
         raw = self.store.get(include=["documents", "metadatas"])
         if not raw["ids"]:
-            raise RuntimeError("Vector store is empty. Run `python -m fabrag.ingest` first.")
+            raise RuntimeError(f"No documents indexed for profile '{self.s.profile.key}'. Add files to "
+                               f"{self.s.docs_dir} and run `python -m fabrag.ingest --profile {self.s.profile.key}`.")
         self.all_chunks = [Document(page_content=t, metadata=m) for t, m in zip(raw["documents"], raw["metadatas"])]
         self.bm25 = BM25(self.all_chunks)
         self.llm = get_llm(self.s)
-        self.chain = PROMPT | self.llm if self.llm is not None else None
+        self.chain = build_prompt(self.s) | self.llm if self.llm is not None else None
 
     # ---------- retrieval ----------
     def retrieve(self, question: str, k: Optional[int] = None, mode: Optional[str] = None) -> List[tuple[Document, float]]:

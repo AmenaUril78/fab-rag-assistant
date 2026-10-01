@@ -1,13 +1,16 @@
-"""Load markdown documents, split them into chunks, and index them in Chroma.
+"""Load documents (md, txt, pdf, docx, html), split them into chunks, and index them in Chroma.
 
-Usage:  python -m fabrag.ingest
+Usage:  python -m fabrag.ingest                 (profile from FABRAG_PROFILE, default "fab")
+        python -m fabrag.ingest --profile it
+        python -m fabrag.ingest --profile private   (your own docs in data/private/)
 """
 from __future__ import annotations
 
+import argparse
+import html
 import re
-import shutil
 from pathlib import Path
-from typing import List
+from typing import Callable, Dict, List
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
@@ -19,15 +22,75 @@ from .embeddings import get_embeddings
 DOC_ID_RE = re.compile(r"Document IDs?:\s*([A-Z0-9\-, ]+?)\s*\|")
 
 
+# ---------- file loaders: every format is converted to markdown-style text ----------
+def _read_md(path: Path) -> str:
+    return path.read_text(encoding="utf-8", errors="ignore")
+
+
+def _read_pdf(path: Path) -> str:
+    from pypdf import PdfReader
+
+    pages = [(p.extract_text() or "").strip() for p in PdfReader(str(path)).pages]
+    return "\n\n".join(f"## Page {i}\n{t}" for i, t in enumerate(pages, 1) if t)
+
+
+def _read_docx(path: Path) -> str:
+    import docx
+
+    out = []
+    for para in docx.Document(str(path)).paragraphs:
+        text = para.text.strip()
+        if not text:
+            continue
+        style = (para.style.name or "").lower()
+        if style.startswith("title") or style == "heading 1":
+            out.append(f"# {text}")
+        elif style.startswith("heading"):
+            out.append(f"## {text}")
+        elif "list" in style:
+            out.append(f"- {text}")
+        else:
+            out.append(text)
+    return "\n\n".join(out)
+
+
+def _read_html(path: Path) -> str:
+    raw = path.read_text(encoding="utf-8", errors="ignore")
+    raw = re.sub(r"(?is)<(script|style).*?</\1>", "", raw)
+    raw = re.sub(r"(?is)<h1[^>]*>(.*?)</h1>", r"\n# \1\n", raw)
+    raw = re.sub(r"(?is)<h[2-3][^>]*>(.*?)</h[2-3]>", r"\n## \1\n", raw)
+    raw = re.sub(r"(?is)<li[^>]*>", "\n- ", raw)
+    raw = re.sub(r"(?is)<(br|/p|/div|/tr)[^>]*>", "\n", raw)
+    text = html.unescape(re.sub(r"<[^>]+>", "", raw))
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+LOADERS: Dict[str, Callable[[Path], str]] = {
+    ".md": _read_md, ".markdown": _read_md, ".txt": _read_md,
+    ".pdf": _read_pdf, ".docx": _read_docx, ".html": _read_html, ".htm": _read_html,
+}
+
+
 def load_documents(docs_dir: Path) -> List[Document]:
     docs = []
-    for path in sorted(docs_dir.glob("*.md")):
-        text = path.read_text(encoding="utf-8")
-        title = text.splitlines()[0].lstrip("# ").strip()
+    for path in sorted(docs_dir.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in LOADERS or path.name.startswith("."):
+            continue
+        if path.name == "README.md" and path.parent == docs_dir:
+            continue  # folder instructions, not knowledge
+        try:
+            text = LOADERS[path.suffix.lower()](path)
+        except Exception as e:  # one bad file should not stop the whole index
+            print(f"  skipped {path.name}: {e}")
+            continue
+        if not text.strip():
+            continue
+        first = next((l for l in text.splitlines() if l.strip()), path.stem)
+        title = first.lstrip("# ").strip() if first.startswith("#") else path.stem.replace("_", " ")
         m = DOC_ID_RE.search(text)
         docs.append(Document(page_content=text, metadata={
-            "source": path.name,
-            "title": title,
+            "source": str(path.relative_to(docs_dir)),
+            "title": title[:120],
             "doc_id": m.group(1).strip() if m else "",
         }))
     return docs
@@ -42,35 +105,40 @@ def split_documents(docs: List[Document], chunk_size: int, chunk_overlap: int) -
 
     chunks: List[Document] = []
     for doc in docs:
+        n = 0
         for section in header_splitter.split_text(doc.page_content):
             sec_name = section.metadata.get("section", "Overview")
-            for i, piece in enumerate(size_splitter.split_text(section.page_content)):
+            for piece in size_splitter.split_text(section.page_content):
                 # Prefix with doc title + section so each chunk carries its own context
                 content = f"[{doc.metadata['title']} > {sec_name}]\n{piece}"
-                meta = {**doc.metadata, "section": sec_name}
-                meta["chunk_id"] = f"{doc.metadata['source']}::{sec_name}::{i}"
+                meta = {**doc.metadata, "section": sec_name,
+                        "chunk_id": f"{doc.metadata['source']}::{sec_name}::{n}"}
                 chunks.append(Document(page_content=content, metadata=meta))
+                n += 1
     return chunks
 
 
 def build_index(settings: Settings | None = None, reset: bool = True) -> Chroma:
     s = settings or get_settings()
-    if reset and s.persist_dir.exists():
-        shutil.rmtree(s.persist_dir)
+    s.persist_dir.mkdir(parents=True, exist_ok=True)
+    embeddings = get_embeddings(s.embedding_provider, s.openai_embedding_model)
+    kwargs = dict(collection_name=s.collection, embedding_function=embeddings,
+                  persist_directory=str(s.persist_dir))
+    if reset:  # drop the old collection through Chroma (safe even while the app has it open)
+        Chroma(**kwargs).delete_collection()
+    store = Chroma(**kwargs, collection_metadata={"hnsw:space": "cosine",
+                                                  "embedding_provider": s.embedding_provider})
 
     docs = load_documents(s.docs_dir)
     chunks = split_documents(docs, s.chunk_size, s.chunk_overlap)
-    store = Chroma(
-        collection_name=s.collection,
-        embedding_function=get_embeddings(s.embedding_provider, s.openai_embedding_model),
-        persist_directory=str(s.persist_dir),
-        collection_metadata={"hnsw:space": "cosine", "embedding_provider": s.embedding_provider},
-    )
-    store.add_documents(chunks, ids=[c.metadata["chunk_id"] for c in chunks])
-    print(f"Indexed {len(chunks)} chunks from {len(docs)} documents into {s.persist_dir} "
+    if chunks:
+        store.add_documents(chunks, ids=[c.metadata["chunk_id"] for c in chunks])
+    print(f"[{s.profile.key}] Indexed {len(chunks)} chunks from {len(docs)} documents in {s.docs_dir} "
           f"(embeddings: {s.embedding_provider})")
     return store
 
 
 if __name__ == "__main__":
-    build_index()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--profile", default=None, help="fab | it | private")
+    build_index(get_settings(ap.parse_args().profile))
