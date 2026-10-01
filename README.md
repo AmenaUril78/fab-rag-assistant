@@ -4,6 +4,28 @@ FabAssist answers fab engineers' and technicians' questions ("Tool shows ALM-402
 
 It is built as a forward-deployed prototype: quick to stand up, measurable, and structured so it could be handed to an IT or MLOps team for production.
 
+**Live demo:** [fab-rag-assistant.streamlit.app](https://fab-rag-assistant-5cbn4sjjp4ntn6toyayd8s.streamlit.app) (runs in retrieval-only mode, with no LLM key, showing cited passages). The full generative version runs locally with a free open-source model via [Ollama](#run-fully-local-with-ollama-no-api-key).
+
+![FabAssist answering a question with Llama 3.2 running locally](docs/screenshot.png)
+
+### Results (28 labeled questions, MiniLM embeddings, Llama 3.2 via Ollama)
+
+| Retrieval | Doc Hit@1 | Doc Hit@3 | Section Hit@3 | MRR | Hit@3 (exact ID lookups) |
+|---|---|---|---|---|---|
+| Vector only | 96% | 96% | 86% | 0.96 | 83% |
+| BM25 only | 89% | 100% | 96% | 0.95 | 100% |
+| **Hybrid (RRF)** | **100%** | **100%** | **100%** | **1.00** | **100%** |
+
+Hybrid retrieval fixed the cases each method missed on its own: vector search missed exact alarm-code and document-ID lookups, and BM25 missed paraphrased questions at rank 1.
+
+| Generation check | Result |
+|---|---|
+| Answers that include citations | 82% |
+| Correct "not found" on out-of-scope questions | 100% (2 of 2) |
+| Average latency (local Llama 3.2, Apple Silicon) | 1.7 s |
+
+*Limitations: the evaluation set is small and was written alongside the documents, so these numbers show the method works, not production accuracy. Next steps are a larger engineer-labeled set and a re-ranker.*
+
 > The sample knowledge base in `data/docs/` is **fictional**. It was written for this project to resemble real fab documentation. Swap in your own documents to reuse the pipeline.
 
 ## Architecture
@@ -39,6 +61,21 @@ python -m fabrag.ingest          # chunk + embed + store in ./chroma_db (first r
 streamlit run app.py             # chat UI at http://localhost:8501
 uvicorn api:app --reload         # REST API, docs at http://localhost:8000/docs
 ```
+
+### Run fully local with Ollama (no API key)
+
+1. Install [Ollama](https://ollama.com) and run `ollama pull llama3.2`.
+2. Put this in `.env`:
+   ```
+   LLM_PROVIDER=openai
+   OPENAI_BASE_URL=http://localhost:11434/v1
+   OPENAI_API_KEY=ollama
+   OPENAI_MODEL=llama3.2
+   EMBEDDING_PROVIDER=minilm
+   ```
+3. `python -m streamlit run app.py`
+
+Everything (embeddings, vector search, and generation) stays on your machine, which matters in a fab where documents often cannot leave the site. Any OpenAI-compatible endpoint works the same way by changing `OPENAI_BASE_URL`.
 
 API example:
 ```bash
