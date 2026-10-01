@@ -1,7 +1,17 @@
 """Streamlit chat UI for FabAssist.  Run:  streamlit run app.py"""
+import os
 import time
 
 import streamlit as st
+
+# Copy Streamlit Cloud secrets into environment variables (stripping stray spaces/quotes)
+# BEFORE the fabrag modules read their settings.
+try:
+    for _k, _v in st.secrets.items():
+        if isinstance(_v, str):
+            os.environ[_k] = _v.strip().strip('"').strip("'").strip()
+except Exception:  # no secrets file locally: fine, .env / shell env is used instead
+    pass
 
 from fabrag.config import get_settings
 from fabrag.ingest import build_index
@@ -10,8 +20,15 @@ from fabrag.rag import FabRAG
 st.set_page_config(page_title="FabAssist", page_icon="🔧", layout="wide")
 
 
+def key_fingerprint(name: str) -> str:
+    key = os.getenv(name, "")
+    if not key:
+        return "not set"
+    return f"{key[:8]}…{key[-4:]} ({len(key)} chars)"
+
+
 @st.cache_resource
-def load_rag(mode: str) -> FabRAG:
+def load_rag(mode: str, key_fp: str = "") -> FabRAG:
     settings = get_settings(retrieval_mode=mode)
     if not (settings.persist_dir / "chroma.sqlite3").exists():
         # First run (e.g. on Streamlit Cloud or Codespaces): build the vector DB automatically
@@ -27,6 +44,9 @@ with st.sidebar:
     k = st.slider("Passages to retrieve (top-k)", 2, 8, 4)
     s = get_settings()
     st.caption(f"Embeddings: `{s.embedding_provider}` · LLM: `{s.llm_provider}`")
+    key_name = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}.get(s.llm_provider)
+    if key_name:
+        st.caption(f"API key: `{key_fingerprint(key_name)}`")
     st.divider()
     st.markdown("**Try asking**")
     examples = [
@@ -44,7 +64,7 @@ st.title("🔧 FabAssist")
 st.caption("RAG assistant over fab SOPs, troubleshooting guides, alarm codes, and lessons learned. "
            "Sample knowledge base is fictional.")
 
-rag = load_rag(mode)
+rag = load_rag(mode, key_fingerprint("OPENAI_API_KEY") + key_fingerprint("ANTHROPIC_API_KEY"))
 if "history" not in st.session_state:
     st.session_state.history = []
 

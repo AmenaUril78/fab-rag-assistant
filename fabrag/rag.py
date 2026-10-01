@@ -114,6 +114,24 @@ def get_llm(settings: Settings):
     raise ValueError(f"Unknown LLM_PROVIDER: {p}")
 
 
+LLM_ERROR_HINTS = {
+    "invalid_api_key": "The API key was rejected. Create a new key and paste the whole key into Secrets.",
+    "insufficient_quota": "The account has no credit. Add billing credit on the provider's billing page.",
+    "model_not_found": "This API key cannot use the configured model. Change OPENAI_MODEL / ANTHROPIC_MODEL.",
+    "rate_limit_exceeded": "Rate limited. Wait a moment and try again.",
+}
+
+
+def explain_llm_error(e: Exception) -> str:
+    """Turn a provider error into a short, key-free message."""
+    text = str(getattr(e, "body", "") or "") + " " + str(e)
+    code = getattr(e, "code", None) or (re.search(r"'code': '([a-z_]+)'", text) or [None, None])[1]
+    if not code and "does not exist" in text:
+        code = "model_not_found"
+    hint = LLM_ERROR_HINTS.get(code or "", "Check the API key, billing, and model name.")
+    return f"LLM call failed ({type(e).__name__}{', ' + code if code else ''}). {hint} Showing the retrieved passages instead."
+
+
 class FabRAG:
     def __init__(self, settings: Optional[Settings] = None) -> None:
         self.s = settings or get_settings()
@@ -163,9 +181,7 @@ class FabRAG:
             msg = self.chain.invoke({"context": context, "question": question})
         except Exception as e:  # bad key, quota, network: degrade gracefully instead of crashing
             return Answer(question, self._extractive(question, hits), sources,
-                          mode="extractive (LLM unavailable)",
-                          error=f"{type(e).__name__}: the LLM call failed. Check the API key and billing. "
-                                "Showing the retrieved passages instead.")
+                          mode="extractive (LLM unavailable)", error=explain_llm_error(e))
         return Answer(question, msg.content if isinstance(msg.content, str) else str(msg.content), sources, mode=self.s.llm_provider)
 
     @staticmethod
