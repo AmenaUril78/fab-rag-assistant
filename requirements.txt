@@ -1,0 +1,14 @@
+chromadb>=1.0
+langchain-core>=0.3
+langchain-text-splitters>=0.3
+langchain-chroma>=0.2
+langchain-anthropic>=0.3
+langchain-openai>=0.3
+streamlit>=1.40
+fastapi>=0.115
+uvicorn>=0.30
+scikit-learn>=1.5
+numpy
+python-dotenv
+pytest
+httpx
