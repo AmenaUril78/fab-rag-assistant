@@ -8,6 +8,7 @@ recipe names) that embedding models handle poorly.
 from __future__ import annotations
 
 import math
+import os
 import re
 from collections import Counter
 from dataclasses import dataclass, field
@@ -95,6 +96,10 @@ class Answer:
     error: str = ""
 
 
+OPENAI_FALLBACK_MODELS = [m.strip() for m in os.getenv(
+    "OPENAI_FALLBACK_MODELS", "gpt-5-mini,gpt-4.1-mini,gpt-4o-mini").split(",") if m.strip()]
+
+
 def get_llm(settings: Settings):
     p = settings.llm_provider.lower()
     if p == "anthropic":
@@ -104,11 +109,16 @@ def get_llm(settings: Settings):
     if p == "openai":
         from langchain_openai import ChatOpenAI
 
-        model = settings.openai_model
-        # Reasoning models (gpt-5.x, o-series) only accept the default temperature
-        if model.startswith(("gpt-5", "o1", "o3", "o4")):
-            return ChatOpenAI(model=model)
-        return ChatOpenAI(model=model, temperature=0)
+        def make(model: str):
+            # Reasoning models (gpt-5.x, o-series) only accept the default temperature
+            if model.startswith(("gpt-5", "o1", "o3", "o4")):
+                return ChatOpenAI(model=model, max_retries=1)
+            return ChatOpenAI(model=model, temperature=0, max_retries=1)
+
+        # Try the configured model first, then common models, so the app works with
+        # whichever models the API key has access to.
+        models = [settings.openai_model] + [m for m in OPENAI_FALLBACK_MODELS if m != settings.openai_model]
+        return make(models[0]).with_fallbacks([make(m) for m in models[1:]])
     if p == "none":
         return None
     raise ValueError(f"Unknown LLM_PROVIDER: {p}")
@@ -182,7 +192,8 @@ class FabRAG:
         except Exception as e:  # bad key, quota, network: degrade gracefully instead of crashing
             return Answer(question, self._extractive(question, hits), sources,
                           mode="extractive (LLM unavailable)", error=explain_llm_error(e))
-        return Answer(question, msg.content if isinstance(msg.content, str) else str(msg.content), sources, mode=self.s.llm_provider)
+        used = (getattr(msg, "response_metadata", {}) or {}).get("model_name") or self.s.llm_provider
+        return Answer(question, msg.content if isinstance(msg.content, str) else str(msg.content), sources, mode=used)
 
     @staticmethod
     def _extractive(question: str, hits: List[tuple[Document, float]]) -> str:
