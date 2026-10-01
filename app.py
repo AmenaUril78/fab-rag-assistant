@@ -13,13 +13,11 @@ st.set_page_config(page_title="FabAssist", page_icon="🔧", layout="wide")
 @st.cache_resource
 def load_rag(mode: str) -> FabRAG:
     settings = get_settings(retrieval_mode=mode)
-    try:
-        return FabRAG(settings)
-    except Exception:
+    if not (settings.persist_dir / "chroma.sqlite3").exists():
         # First run (e.g. on Streamlit Cloud or Codespaces): build the vector DB automatically
         with st.spinner("Building the vector database (first run only)…"):
             build_index(settings)
-        return FabRAG(settings)
+    return FabRAG(settings)
 
 
 with st.sidebar:
