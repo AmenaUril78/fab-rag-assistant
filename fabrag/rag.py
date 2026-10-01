@@ -174,12 +174,15 @@ class FabRAG:
         if not hits:
             return "I could not find this in the knowledge base."
         q = set(tokenize(question))
-        lines = []
+        lines, seen = [], set()
         for n, (doc, _) in enumerate(hits[:3], start=1):
             for line in doc.page_content.splitlines()[1:]:
-                line = line.strip().lstrip("-*# ").strip()
-                if len(line) > 25 and q & set(tokenize(line)):
+                if line.lstrip().startswith("#"):
+                    continue
+                line = re.sub(r"^[-*#\s]*(\d+\.\s+)?", "", line.strip())
+                if len(line) > 25 and not line.startswith("[") and line not in seen and q & set(tokenize(line)):
+                    seen.add(line)
                     lines.append((len(q & set(tokenize(line))), n, line))
         lines.sort(key=lambda x: -x[0])
         picked = lines[:6] or [(0, 1, hits[0][0].page_content[:400])]
-        return "Most relevant passages (no LLM configured):\n" + "\n".join(f"- {t} [{n}]" for _, n, t in picked)
+        return "Most relevant passages from the knowledge base:\n" + "\n".join(f"- {t} [{n}]" for _, n, t in picked)
