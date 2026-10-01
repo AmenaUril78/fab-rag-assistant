@@ -77,7 +77,7 @@ PROFILES = {
         docs_dir=Path(os.getenv("PRIVATE_DOCS_DIR", ROOT / "data" / "private")),
         audience="IT and network operations staff",
         extra_rules=IT_RULES,
-        examples=IT_EXAMPLES,
+        examples=[],  # your documents, your questions: no demo examples here
     ),
 }
 

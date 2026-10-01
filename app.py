@@ -99,7 +99,10 @@ with st.sidebar:
         st.session_state[f"history_{profile}"] = []
 
     st.divider()
-    st.markdown("**Try asking**")
+    if s.profile.examples:
+        st.markdown("**Try asking**")
+    else:
+        st.caption("Ask about anything in your own documents. Answers should cite them as [1], [2]…")
     for ex in s.profile.examples:
         if st.button(ex, use_container_width=True, key=f"ex_{profile}_{ex}"):
             st.session_state.pending = ex

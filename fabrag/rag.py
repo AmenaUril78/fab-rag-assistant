@@ -78,7 +78,7 @@ SYSTEM_PROMPT = """You are {assistant}, a troubleshooting assistant for {audienc
 Answer ONLY using the numbered context passages. Rules:
 - Cite every factual statement with the passage number in brackets, e.g. [1] or [2][3].
 - Give concrete steps, limits, commands, and error/alarm codes exactly as written in the context.
-- If the context does not contain the answer, say "I could not find this in the knowledge base" and suggest who to escalate to if the context mentions it. Never guess numbers, limits, or commands.
+- If the passages do not directly answer the question, reply exactly "I could not find this in the knowledge base". Do not use outside knowledge, and never invent commands and suggest who to escalate to if the context mentions it. Never guess numbers, limits, or commands.
 {extra_rules}"""
 
 
@@ -92,6 +92,9 @@ def build_prompt(settings: Settings) -> ChatPromptTemplate:
 
 
 PROMPT = build_prompt(get_settings("fab"))  # default, kept for backwards compatibility
+
+
+CITATION_RE = re.compile(r"\[\d+\]")
 
 
 @dataclass
@@ -203,7 +206,15 @@ class FabRAG:
             return Answer(question, self._extractive(question, hits), sources,
                           mode="extractive (LLM unavailable)", error=explain_llm_error(e))
         used = (getattr(msg, "response_metadata", {}) or {}).get("model_name") or self.s.llm_provider
-        return Answer(question, msg.content if isinstance(msg.content, str) else str(msg.content), sources, mode=used)
+        text = msg.content if isinstance(msg.content, str) else str(msg.content)
+        if not CITATION_RE.search(text) and "could not find" not in text.lower():
+            # Small local models sometimes ignore the documents and invent an answer.
+            # Never show an uncited answer on its own: flag it and show what the documents say.
+            return Answer(question, text + "\n\n---\n**What your documents actually say:**\n\n"
+                          + self._extractive(question, hits).split("\n", 1)[-1], sources, mode=used,
+                          error="This answer has no citations, so it may not come from your documents. "
+                                "Trust only the quoted passages below and check Sources before acting.")
+        return Answer(question, text, sources, mode=used)
 
     @staticmethod
     def _extractive(question: str, hits: List[tuple[Document, float]]) -> str:
