@@ -85,8 +85,10 @@ def load_documents(docs_dir: Path) -> List[Document]:
             continue
         if not text.strip():
             continue
-        first = next((l for l in text.splitlines() if l.strip()), path.stem)
-        title = first.lstrip("# ").strip() if first.startswith("#") else path.stem.replace("_", " ")
+        # Title = first meaningful line (skipping "## Page N" markers added for PDFs), else the file name
+        lines = [l.strip().lstrip("#").strip() for l in text.splitlines() if l.strip()]
+        lines = [l for l in lines if not re.fullmatch(r"Page \d+", l)]
+        title = lines[0] if lines and len(lines[0]) <= 100 else path.stem.replace("_", " ")
         m = DOC_ID_RE.search(text)
         docs.append(Document(page_content=text, metadata={
             "source": str(path.relative_to(docs_dir)),
