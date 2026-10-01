@@ -47,6 +47,20 @@ with st.sidebar:
     key_name = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}.get(s.llm_provider)
     if key_name:
         st.caption(f"API key: `{key_fingerprint(key_name)}`")
+    if s.llm_provider == "openai":
+        base = os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+        st.caption(f"Endpoint: `{base}` · Model: `{s.openai_model}`")
+        if st.button("Check available models", use_container_width=True):
+            try:
+                from openai import OpenAI
+
+                ids = sorted(m.id for m in OpenAI().models.list())
+                st.success(f"Key works. {len(ids)} models available:")
+                st.code("\n".join(ids[:60]) or "(none listed)")
+            except Exception as e:
+                from fabrag.rag import explain_llm_error
+
+                st.error(explain_llm_error(e).replace(" Showing the retrieved passages instead.", ""))
     st.divider()
     st.markdown("**Try asking**")
     examples = [
