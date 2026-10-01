@@ -12,7 +12,7 @@ FabAssist answers fab engineers' and technicians' questions ("Tool shows ALM-402
 
 It is built as a forward-deployed prototype: quick to stand up, measurable, and structured so it could be handed to an IT or MLOps team for production.
 
-**Live demo:** [fab-rag-assistant.streamlit.app](https://fab-rag-assistant-5cbn4sjjp4ntn6toyayd8s.streamlit.app) (runs in retrieval-only mode, with no LLM key, showing cited passages). The full generative version runs locally with a free open-source model via [Ollama](#run-fully-local-with-ollama-no-api-key).
+**Live demo:** [fab-rag-assistant.streamlit.app](https://fab-rag-assistant-5cbn4sjjp4ntn6toyayd8s.streamlit.app) (runs in retrieval-only mode, with no LLM key, showing cited passages). The full generative version runs locally with a free open-source model via Ollama: see [Run it on your Mac](#run-it-on-your-mac-step-by-step).
 
 ![FabAssist answering a question with Llama 3.2 running locally](docs/screenshot.png)
 
@@ -68,43 +68,93 @@ flowchart LR
 - **Grounded prompting.** The model must cite passage numbers, must not guess numeric limits, must say "I could not find this" when the answer isn't in context, and must put safety actions first.
 - **Pluggable providers.** Embeddings (`minilm` local/free, `openai`, `hashing` offline) and the LLM (`anthropic`, `openai`, `none` = extractive) are set by environment variables. With `LLM_PROVIDER=none` the app runs with no API key.
 
-## Quickstart
+## Run it on your Mac (step by step)
+
+Everything runs on your laptop: your documents, the search, and the AI model (Llama 3.2 through Ollama). No API key, no cost, and nothing is sent to the internet.
+
+### One-time setup (about 15 minutes)
+
+1. **Install Ollama** (the free local AI model): download it from [ollama.com](https://ollama.com), drag it into Applications, and open it once. A llama icon appears in the menu bar.
+2. **Download the model.** Open Terminal (Command + Space, type `Terminal`, press Enter) and run:
+   ```bash
+   ollama pull llama3.2
+   ```
+   Wait for `success` (about 2 GB).
+3. **Download this project.** In the same Terminal window, run:
+   ```bash
+   cd ~ && git clone https://github.com/AmenaUril78/fab-rag-assistant.git
+   ```
+   If macOS asks to install "command line developer tools", click **Install**, then run the line again.
+
+### Every time you want to use it
+
+1. **Open the project folder:** in Finder press **Shift + Command + G**, type `~/fab-rag-assistant`, press Enter.
+2. **Double-click `Start FabAssist.command`.** The very first time, right-click it, choose **Open**, then **Open** again (macOS asks once because it is a script).
+   - A Terminal window opens and the app opens in your browser at `http://localhost:8501`.
+   - The first launch takes a few minutes to install libraries. Later launches take seconds.
+   - The launcher also downloads the latest version of the project automatically.
+3. **To stop the app,** close that Terminal window.
+
+Tip: drag `Start FabAssist.command` to your Dock or Desktop for one-click access.
+
+### Add your documents
+
+1. In the sidebar, **Knowledge base** should say **My documents (private)** (it is the default on your laptop).
+2. Click **Your documents · add or remove** at the top of the page.
+3. Drag in your runbooks: **PDF, Word (.docx), Markdown (.md), text (.txt), or HTML**.
+4. That's it. Files are read automatically, and adding, editing, or removing a file (with **Remove**) updates the search on its own.
+
+For the best answers, use documents with **one heading per problem** (for example "Port err-disabled", "Client gets 169.254 address"). Scanned PDFs (images of text) cannot be read; use the original Word or text file instead.
+
+### Ask questions and check the answers
+
+Type the problem the way you would describe a ticket, for example *"User gets VPN error 809 from home"*.
+
+| What you see | What it means |
+|---|---|
+| An answer with **[1] [2]** citations | It came from your documents. Click **Sources** to read the original passage. |
+| *"I could not find this in the knowledge base"* | Your documents don't cover it. Add a runbook that does. |
+| A **yellow warning** "This answer has no citations…" | The model may have made it up. Trust only the quoted passages shown under it. |
+
+**Always open the cited source before changing a production device.** The assistant helps you find the right runbook fast; it does not replace it.
+
+### Switch knowledge bases
+
+Use the **Knowledge base** menu in the sidebar:
+
+- **My documents (private):** your own files (only on your laptop).
+- **IT / network ops (demo):** fictional IT runbooks, with example questions in the sidebar.
+- **Semiconductor fab (demo):** fictional fab documents, with example questions in the sidebar.
+
+### Where your files are and who can see them
+
+Your documents are saved in `~/fab-rag-assistant/data/private/` on your laptop only. That folder is excluded from Git (a test checks this), so it is never committed or pushed to GitHub, and it never appears on the public website. Check your organization's data policy before adding internal documents to any AI tool.
+
+### Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `Start FabAssist.command` is not in the folder | In Terminal: `cd ~/fab-rag-assistant && git pull` |
+| `git pull` says *untracked working tree files would be overwritten* | Delete the file it names (for example `rm eval/results_it_minilm.md`), then run `git pull` again |
+| Browser says the page can't be reached, or *Port 8501 is already in use* | An older copy is still running. Close all Terminal windows, then double-click the launcher again |
+| Yellow *LLM call failed* warning | Ollama is not running. Open the Ollama app (llama icon in the menu bar). In Terminal, `ollama list` should show `llama3.2` |
+| `ModuleNotFoundError` | The app was started with the wrong Python. Close Terminal and use the launcher instead of typing commands |
+| A document doesn't show up in answers | Check it appears under **Your documents**. Scanned PDFs can't be read |
+| Answers are vague or uncited | Ask a more specific question, add documents that cover it, or try a larger model: `ollama pull llama3.1:8b` and set `OPENAI_MODEL=llama3.1:8b` in the `.env` file |
+
+## Developer setup (manual, any OS)
 
 ```bash
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env                                   # add your ANTHROPIC_API_KEY (or set LLM_PROVIDER=none)
+cp .env.example .env                                   # choose Ollama, a hosted API, or LLM_PROVIDER=none
 
-python -m fabrag.ingest --profile fab   # chunk + embed + store (the app also does this on first launch)
-python -m streamlit run app.py   # chat UI at http://localhost:8501
-uvicorn api:app --reload         # REST API, docs at http://localhost:8000/docs
+python -m fabrag.ingest --profile it     # optional: the app indexes automatically on first launch
+python -m streamlit run app.py           # chat UI at http://localhost:8501
+uvicorn api:app --reload                 # REST API, docs at http://localhost:8000/docs
 ```
 
-### Use it with your own work documents (Mac, no terminal)
-
-1. Install [Ollama](https://ollama.com) once and download a model (`ollama pull llama3.2`).
-2. In Finder, double-click **`Start FabAssist.command`** in the project folder. The first time, right-click it and choose **Open**. It starts Ollama, sets everything up, and opens the app in your browser.
-3. The app opens on **My documents (private)**. Drag your runbooks (PDF, Word, Markdown, text, HTML) into **Your documents**. They are read automatically; new, edited, or removed files are picked up on their own.
-4. Ask questions. Close the Terminal window to stop the app.
-
-Files are saved in `data/private/` on your computer only.
-
-`data/private/` is listed in `.gitignore`, and a test checks that it stays ignored, so your files are not committed or pushed. Check your organization's data policy before using internal documents with any AI tool, and treat answers as a pointer to the right runbook, not a replacement for it: always open the cited source before changing a production device.
-
-### Run fully local with Ollama (no API key)
-
-1. Install [Ollama](https://ollama.com) and run `ollama pull llama3.2`.
-2. Put this in `.env`:
-   ```
-   LLM_PROVIDER=openai
-   OPENAI_BASE_URL=http://localhost:11434/v1
-   OPENAI_API_KEY=ollama
-   OPENAI_MODEL=llama3.2
-   EMBEDDING_PROVIDER=minilm
-   ```
-3. `python -m streamlit run app.py`
-
-Everything (embeddings, vector search, and generation) stays on your machine, which matters in a fab where documents often cannot leave the site. Any OpenAI-compatible endpoint works the same way by changing `OPENAI_BASE_URL`.
+LLM options (set in `.env`): Ollama or any OpenAI-compatible server via `OPENAI_BASE_URL`, hosted OpenAI or Anthropic with an API key, or `LLM_PROVIDER=none` for cited passages only. Everything (embeddings, vector search, and generation) can stay on your machine, which matters in a fab where documents often cannot leave the site.
 
 API example:
 ```bash
